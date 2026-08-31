@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Model weights and voice data are large binaries; keep them out of git.
+models/
+voice/*.pth
+voice/*.index
+voice/*.wav
+
+# Local recordings and measurement output
+out/
+*.log
