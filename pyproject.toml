@@ -46,6 +46,9 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tools/ is a repo-root directory rather than an installed package, because it is only
+# ever run as `python -m tools.x` from the repo root. Tests need it on the path too.
+pythonpath = ["."]
 
 [build-system]
 requires = ["hatchling"]

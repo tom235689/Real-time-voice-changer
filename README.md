@@ -49,6 +49,7 @@ has to be installed by hand.
 | Real-time simulation (no device) | implemented |
 | CLI | implemented |
 | Desktop GUI | implemented |
+| Model export and quantisation tools | implemented |
 | Live device path into a meeting app | **needs VB-CABLE installed** |
 
 Operating points inherited from the earlier prototype of this pipeline, on the same
@@ -74,8 +75,40 @@ models/rvc/onnx/generator_<voice>_f<frames>*.onnx  one generator per chunk size
 ```
 
 A generator ONNX has its sequence length baked in by NSF, so each chunk size needs its
-own export. `rtvc devices` and the GUI only offer chunk sizes that actually exist on
-disk.
+own export. The GUI only offers chunk sizes that actually exist on disk.
+
+## Preparing models
+
+Only needed to add a voice or a chunk size; the runtime never touches these.
+
+```powershell
+uv sync --extra tools                                    # torch, onnx, transformers
+
+python -m tools.fetch_models                             # base assets, ~780 MB
+python -m tools.inspect_voice voice\my_voice.pth         # check sr / f0 / version first
+python -m tools.export_onnx --voice voice\my_voice.pth   # -> fp32 ONNX
+python -m tools.quantize --audio voice\sample.wav        # -> int8, calibrated
+```
+
+`inspect_voice` is worth running before anything else: a v1 model or one trained with
+`f0=0` needs a different pipeline than this repo implements, and it says so immediately
+rather than failing later in the export.
+
+**Calibrate on real speech.** `tools.quantize` defaults to it and writes `_qdqc`.
+Calibrating on random tensors instead — `--random`, which writes `_qdq` — measures 2.4x
+the baseline log-spectral distance with output RMS down 42%. It still runs and still
+benchmarks fast, which is what makes it easy to ship by mistake. Use a recording of the
+voice being converted.
+
+To add a chunk size, export and quantise for it specifically:
+
+```powershell
+python -m tools.export_onnx --voice voice\my_voice.pth --skip-encoder --chunk 300
+python -m tools.quantize --audio voice\sample.wav --chunk 300
+```
+
+The encoder is voice-independent and length-agnostic, so `--skip-encoder` is right for
+everything after the first export.
 
 ## Use
 

@@ -52,7 +52,10 @@ def _require(path: Path, model: ModelConfig) -> None:
             message.append(f"No generator is exported for {model.voice!r} at this precision.")
     else:
         message.append(f"No exported voice named {model.voice!r} under {model.onnx_dir}.")
-    message.append("Export the missing file with the RVC export tools before running.")
+    message.append(
+        f"Export it with: python -m tools.export_onnx --voice voice/{model.voice}.pth "
+        "--skip-encoder --chunk <ms>, then python -m tools.quantize --audio <recording>.wav"
+    )
     raise ModelFileMissing(" ".join(message))
 
 
