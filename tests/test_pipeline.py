@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 
 import numpy as np
+import pytest
 
 from rtvc import wavio
 from rtvc.config import AudioConfig, EngineConfig, RuntimeParams
@@ -117,6 +118,30 @@ def test_bypass_skips_inference():
 
     assert engine.stats.chunks >= 3
     assert converter.calls == calls_after_warmup  # bypassed chunks never reach the model
+
+
+@pytest.mark.parametrize(
+    ("p50", "p95", "expected"),
+    [
+        (60.0, 100.0, "comfortable"),
+        (120.0, 150.0, "workable"),
+        # Measured for the fp32 generator: median inside budget, p95 outside, and in
+        # practice zero underruns. It must not be reported as a failure.
+        (191.4, 210.5, "no slack"),
+        # Measured for the fp32 encoder: median past budget, and it underran 92 times.
+        (219.9, 249.5, "CANNOT KEEP UP"),
+    ],
+)
+def test_verdict_is_decided_by_the_median_not_p95(p50, p95, expected):
+    from rtvc.engine import Telemetry
+
+    assert Telemetry(infer_p50_ms=p50, infer_p95_ms=p95, budget_ms=200.0).verdict == expected
+
+
+def test_verdict_without_measurements_is_unknown():
+    from rtvc.engine import Telemetry
+
+    assert Telemetry().verdict == "unknown"
 
 
 def test_wav_round_trip(tmp_path):

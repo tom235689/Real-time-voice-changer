@@ -45,7 +45,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         model=ModelConfig(
             root=Path(args.models),
             voice=args.voice,
-            int8=not args.fp32,
+            int8_encoder=not args.enc_fp32,
+            int8_generator=not args.gen_fp32,
             variant=args.variant,
             threads=args.threads,
             backend=parse_backend(args.backend),
@@ -59,11 +60,13 @@ def config_from_args(args: argparse.Namespace) -> Config:
 
 
 def describe(cfg: Config, kind: str) -> str:
-    precision = "fp32" if not cfg.model.int8 else f"int8{cfg.model.variant}"
+    generator = f"int8{cfg.model.variant}" if cfg.model.int8_generator else "fp32"
+    encoder = "int8" if cfg.model.int8_encoder else "fp32"
     backend = ",".join(f"{k}={v}" for k, v in cfg.model.backend.items())
     return "\n".join(
         [
-            f"converter {kind}   voice {cfg.model.voice}   generator {precision}",
+            f"converter {kind}   voice {cfg.model.voice}   "
+            f"generator {generator}   encoder {encoder}",
             f"backend {backend}   threads {cfg.model.threads}   key {cfg.params.key_shift:+.0f} st",
             f"chunk {cfg.engine.chunk_ms:.0f}ms   context {cfg.engine.context_ms:.0f}ms   "
             f"fade {cfg.engine.fade_ms:.0f}ms   generator frames {cfg.generator_frames}",
@@ -167,7 +170,18 @@ def add_common(p: argparse.ArgumentParser) -> None:
     model = p.add_argument_group("model")
     model.add_argument("--models", default=str(ROOT / "models"), help="model root directory")
     model.add_argument("--voice", default="my_voice", help="voice model name")
-    model.add_argument("--fp32", action="store_true", help="fp32 generator: better quality, slower")
+    model.add_argument(
+        "--gen-fp32",
+        dest="gen_fp32",
+        action="store_true",
+        help="fp32 generator: better quality, slower, still within budget",
+    )
+    model.add_argument(
+        "--enc-fp32",
+        dest="enc_fp32",
+        action="store_true",
+        help="fp32 encoder: measured over budget on this hardware, for comparison only",
+    )
     model.add_argument(
         "--variant",
         default="_qdqc",

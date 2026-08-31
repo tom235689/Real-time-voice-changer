@@ -81,7 +81,16 @@ class EngineConfig:
 class ModelConfig:
     root: Path = Path("models")
     voice: str = "my_voice"
-    int8: bool = True
+
+    int8_encoder: bool = True
+    """Quantise the content encoder. Turning this off costs far more than it sounds:
+    the int8 encoder under OpenVINO is several times faster than fp32, and fp32 here is
+    on its own enough to push the pipeline past its real-time budget."""
+
+    int8_generator: bool = True
+    """Quantise the generator. fp32 is the quality option worth reaching for; it is
+    slower but, with the encoder left at int8, still fits."""
+
     variant: str = "_qdqc"
     """int8 generator suffix. '_qdqc' is calibrated on real speech, '_qdq' is not."""
 
@@ -113,11 +122,11 @@ class Config:
         return generator_frames(self.engine.chunk_ms, self.engine.fade_ms)
 
     def generator_path(self) -> Path:
-        suffix = self.model.variant if self.model.int8 else ""
+        suffix = self.model.variant if self.model.int8_generator else ""
         return self.model.onnx_dir / f"generator_{self.model.voice}_f{self.generator_frames}{suffix}.onnx"
 
     def encoder_path(self) -> Path:
-        suffix = "_qdq" if self.model.int8 else ""
+        suffix = "_qdq" if self.model.int8_encoder else ""
         return self.model.onnx_dir / f"encoder_contentvec{suffix}.onnx"
 
     # ------------------------------------------------------------------ persistence
@@ -126,8 +135,10 @@ class Config:
         d["model"]["root"] = str(self.model.root)
         return d
 
-    def save(self, path: Path) -> None:
-        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+    def save(self, path: str | Path) -> None:
+        # Qt's file dialogs hand back plain strings, so accept both rather than making
+        # every caller remember to wrap.
+        Path(path).write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Config:
@@ -142,5 +153,5 @@ class Config:
         )
 
     @classmethod
-    def load(cls, path: Path) -> Config:
-        return cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    def load(cls, path: str | Path) -> Config:
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))

@@ -55,8 +55,27 @@ class Telemetry:
 
     @property
     def headroom(self) -> float:
-        """p95 inference time over the per-chunk budget. Above 1.0 cannot keep up."""
+        """p95 inference time over the per-chunk budget. Above 1.0 leaves no slack."""
         return self.infer_p95_ms / self.budget_ms if self.budget_ms else 0.0
+
+    @property
+    def verdict(self) -> str:
+        """Whether this configuration can sustain real time.
+
+        The median decides it, not p95. A chunk that overruns is repaid by the next one
+        that comes in early, so the queue only diverges when the *typical* pass exceeds
+        the budget. p95 over budget means no slack left for a competing load, which is a
+        warning worth printing but not the same as failing.
+        """
+        if not self.budget_ms:
+            return "unknown"
+        if self.infer_p50_ms >= self.budget_ms:
+            return "CANNOT KEEP UP"
+        if self.infer_p95_ms >= self.budget_ms:
+            return "no slack"
+        if self.headroom >= 0.7:
+            return "workable"
+        return "comfortable"
 
     @property
     def total_latency_ms(self) -> float:
@@ -330,7 +349,6 @@ class Engine:
 
     def report(self, elapsed: float) -> str:
         t = self.snapshot()
-        verdict = "comfortable" if t.headroom < 0.7 else "tight" if t.headroom < 1.0 else "OVER BUDGET"
         floor = t.budget_ms + t.infer_max_ms
         return "\n".join(
             [
@@ -342,7 +360,8 @@ class Engine:
                 f"  underruns {t.underruns} (steady)   startup {t.startup_underruns}   "
                 f"overruns {t.overruns}   drops {t.drops}   prefill grew {t.grows}x   "
                 f"vad skipped {t.vad_skips}/{t.chunks}",
-                f"  budget used {t.headroom * 100:.0f}%  ->  {verdict}",
+                f"  p95 uses {t.headroom * 100:.0f}% of budget, median "
+                f"{t.infer_p50_ms / t.budget_ms * 100:.0f}%  ->  {t.verdict}",
                 f"  prefill {t.prefill_ms:.0f}ms  (floor {floor:.0f}ms = chunk + max infer)"
                 f"  ->  processing latency {t.prefill_ms:.0f}ms",
             ]

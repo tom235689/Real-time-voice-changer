@@ -141,7 +141,8 @@ Conferencing apps treat converted speech as noise and will destroy it. Turn that
 | Option | Effect |
 |---|---|
 | `--chunk 150` | Lower latency, tighter budget. Needs a generator exported for it. |
-| `--fp32` | fp32 generator: better quality, considerably slower. |
+| `--gen-fp32` | fp32 generator: better quality. Measured at chunk 200 ms — median 191 ms against a 200 ms budget, p95 211 ms, zero underruns, latency 491 ms. It sustains, but with no slack for a competing load. |
+| `--enc-fp32` | fp32 encoder. Measured median 220 ms against the same budget, 92 underruns in 15 s. It does not sustain; kept for comparison only. |
 | `--key -2` | Pitch shift in semitones. |
 | `--vad-db -45` | Skip inference during silence. Thermal protection on a 35 W part, not a latency win. |
 | `--converter passthrough` | Verify the audio path with the model out of the picture. |

@@ -302,7 +302,9 @@ class MainWindow(QMainWindow):
         self.cfg.model.voice = self.cmb_voice.currentText()
         self.cfg.engine.chunk_ms = self.cmb_chunk.currentData()
         variant = self.cmb_precision.currentData()
-        self.cfg.model.int8 = variant != ""
+        # The combo governs the generator only. The encoder stays int8: fp32 there is
+        # measured over the real-time budget, so it is not offered as a choice.
+        self.cfg.model.int8_generator = variant != ""
         self.cfg.model.variant = variant or "_qdqc"
         return True
 

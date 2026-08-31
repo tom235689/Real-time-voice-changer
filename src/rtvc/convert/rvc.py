@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import soxr
 
+from ..catalog import exported_voices
 from ..config import ModelConfig, RuntimeParams
 from ..constants import ENC_SR, GEN_SR, SR
 from .backends import GeneratorRunner, make_runner
@@ -26,8 +27,33 @@ from .base import Converter
 from .features import MelExtractor, coarse_pitch, decode_f0
 
 
-class GeneratorMissing(FileNotFoundError):
-    """No generator ONNX exists for the requested chunk size."""
+class ModelFileMissing(FileNotFoundError):
+    """A required ONNX file is not on disk for the requested configuration."""
+
+
+def _require(path: Path, model: ModelConfig) -> None:
+    """Fail with what is actually available, not just what is missing.
+
+    A generator is bound to one chunk size, so "file not found" on its own sends people
+    looking for the wrong problem. Listing the chunk sizes that do exist usually answers
+    the question outright.
+    """
+    if path.exists():
+        return
+    message = [f"{path} does not exist."]
+    entry = exported_voices(model.onnx_dir).get(model.voice)
+    if entry is not None:
+        variant = model.variant if model.int8_generator else ""
+        usable = entry.chunk_sizes(variant=variant)
+        if usable:
+            sizes = ", ".join(f"{ms:.0f}ms" for ms in usable)
+            message.append(f"Chunk sizes exported for {model.voice!r} at this precision: {sizes}.")
+        else:
+            message.append(f"No generator is exported for {model.voice!r} at this precision.")
+    else:
+        message.append(f"No exported voice named {model.voice!r} under {model.onnx_dir}.")
+    message.append("Export the missing file with the RVC export tools before running.")
+    raise ModelFileMissing(" ".join(message))
 
 
 class RealRVC(Converter):
@@ -50,11 +76,11 @@ class RealRVC(Converter):
         self.frames = frames
         self.params = params if params is not None else RuntimeParams()
 
-        if not generator_path.exists():
-            raise GeneratorMissing(
-                f"{generator_path.name} does not exist. Export a generator for this chunk "
-                f"size first: python -m tools.export_rvc --voice voice/{model.voice}.pth"
-            )
+        _require(generator_path, model)
+        # The encoder is easy to forget: fp32 and int8 are separate files, and only one
+        # of them is usually present. Fail here with the path rather than inside the
+        # runtime's own loader, which reports it far less clearly.
+        _require(encoder_path, model)
 
         threads = model.threads
         backend = model.backend
