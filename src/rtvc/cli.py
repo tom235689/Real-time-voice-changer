@@ -157,11 +157,21 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_gui(args: argparse.Namespace) -> int:
+    # Probe the dependency directly. Guarding `from .gui.app import run` catches nothing,
+    # because app.py imports PySide6 inside run() and so the import that can fail happens
+    # after the guard; guarding the run() call instead would swallow real bugs.
     try:
-        from .gui.app import run
+        import PySide6.QtWidgets  # noqa: F401
     except ImportError as exc:
-        print(f"GUI dependencies are missing ({exc}). Install with: uv sync --extra gui", file=sys.stderr)
+        print(
+            f"The GUI needs the 'gui' extra ({exc.name} is missing). "
+            "Install it with: uv sync --extra gui",
+            file=sys.stderr,
+        )
         return 2
+
+    from .gui.app import run
+
     return run(config_from_args(args))
 
 

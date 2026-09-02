@@ -267,9 +267,11 @@ class Engine:
                 self._emit[F:] = tail[F:C]
                 self._prev_tail[:] = tail[C:]
 
-                gain = self.params.output_gain
-                if gain != 1.0:
-                    self._emit *= gain
+            # Applied to both paths. Gating still emits a fade-out of the previous tail,
+            # so scaling only the converted branch would leak audio past a muted output.
+            gain = self.params.output_gain
+            if gain != 1.0:
+                self._emit *= gain
 
             if not self.rout.write(self._emit):
                 self.stats.drops += 1

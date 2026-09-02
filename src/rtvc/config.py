@@ -23,6 +23,17 @@ from .constants import SR, generator_frames
 DEFAULT_BACKEND: dict[str, str] = {"enc": "ov", "pit": "ort", "gen": "ort"}
 
 
+def default_model_root() -> Path:
+    """Where to look for models when nobody said.
+
+    A bare relative "models" silently finds nothing whenever the process was started
+    from another directory, which is the normal case for a desktop launcher. Prefer the
+    checkout's own models/ when running from source.
+    """
+    from_source = Path(__file__).resolve().parents[2] / "models"
+    return from_source if from_source.is_dir() else Path("models")
+
+
 @dataclass
 class RuntimeParams:
     """Mutable while the engine runs. Written by a control surface, read by the worker."""
@@ -79,7 +90,7 @@ class EngineConfig:
 
 @dataclass
 class ModelConfig:
-    root: Path = Path("models")
+    root: Path = field(default_factory=default_model_root)
     voice: str = "my_voice"
 
     int8_encoder: bool = True

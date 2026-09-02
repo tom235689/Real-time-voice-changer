@@ -113,6 +113,24 @@ def test_missing_encoder_is_reported_before_inference(tmp_path):
         )
 
 
+def test_gui_command_reports_a_missing_pyside_instead_of_a_traceback(monkeypatch, capsys):
+    """app.py imports PySide6 inside run(), so guarding the module import catches nothing."""
+    import builtins
+
+    from rtvc.cli import main
+
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name.split(".")[0] == "PySide6":
+            raise ImportError(f"No module named {name!r}", name=name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    assert main(["gui"]) == 2
+    assert "uv sync --extra gui" in capsys.readouterr().err
+
+
 def test_exported_voices_is_empty_for_a_missing_directory(tmp_path):
     assert exported_voices(tmp_path / "nope") == {}
 

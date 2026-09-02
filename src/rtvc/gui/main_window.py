@@ -53,6 +53,7 @@ class MainWindow(QMainWindow):
         self.cfg = cfg
         self.session: Session | None = None
         self._starting = False
+        self._closing = False
 
         self.setWindowTitle("Real-time Voice Changer")
         self.setMinimumWidth(520)
@@ -334,6 +335,12 @@ class MainWindow(QMainWindow):
         threading.Thread(target=work, name="rtvc-start", daemon=True).start()
 
     def _on_started(self, session: Session) -> None:
+        if self._closing:
+            # The window was closed while the model was loading, which takes long enough
+            # to be easy to do. Adopting the session now would leave an audio device and
+            # a worker thread held by a window nobody can reach.
+            session.close()
+            return
         self.session = session
         self._starting = False
         self.btn_start.setText("Stop")
@@ -409,5 +416,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Save failed", str(exc))
 
     def closeEvent(self, event) -> None:
+        self._closing = True
+        self._timer.stop()
         self._stop()
         super().closeEvent(event)

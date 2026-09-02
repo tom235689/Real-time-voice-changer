@@ -7,10 +7,37 @@ down. A control surface only needs start(), stop() and snapshot().
 
 from __future__ import annotations
 
+import sys
+
 from .config import Config
 from .convert.base import Converter, Gain, Passthrough
 from .convert.rvc import RealRVC
 from .engine import Engine, Simulator, Telemetry
+
+
+def ensure_com_apartment() -> None:
+    """Give the calling thread a COM apartment, on Windows.
+
+    Windows audio is COM based, and PortAudio cannot open a device from a thread that
+    has none. It does not say so: the failure surfaces as an opaque
+    "Unanticipated host error [PaErrorCode -9999]" naming a host API that may not even
+    be the one in use.
+
+    This matters because anything that keeps a UI responsive opens its device off the
+    main thread. Measured on this machine: main thread opens fine, a worker thread fails
+    every time, and the same worker succeeds once it has an apartment. A stream opened
+    that way keeps running and still closes cleanly after the opening thread has exited,
+    so the short-lived-thread pattern is safe.
+
+    Safe to call repeatedly. A thread that already has an apartment keeps it, and the
+    differing-mode result that comes back is not a problem here -- an apartment of
+    either kind is all PortAudio needs.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    ctypes.windll.ole32.CoInitializeEx(None, 0x0)  # COINIT_MULTITHREADED
 
 
 def build_converter(cfg: Config, kind: str = "rvc") -> Converter:
@@ -53,29 +80,43 @@ class Session:
         return self.cfg.params
 
     def start(self) -> None:
-        """Open the audio stream and start converting. Warmup happens inside Engine.start."""
+        """Claim the audio device, warm the model up, then let audio flow.
+
+        The device is opened before the warmup rather than after, for two reasons. A bad
+        device index or a busy endpoint then fails in under a second instead of after
+        the model has spent the better part of a minute loading. And holding the device
+        across the warmup stops it from being suspended in the meantime -- display-audio
+        and Bluetooth endpoints in particular power down quickly when idle, and a device
+        that enumerated cleanly a moment ago will refuse to open.
+
+        Opening is not streaming: the callback does not run until start() on the stream,
+        so the engine is ready before a single block arrives.
+        """
         import sounddevice as sd
 
         audio = self.cfg.audio
         if audio.input_device is None or audio.output_device is None:
             raise ValueError("input_device and output_device must be set before start()")
 
-        self.engine.start()
+        ensure_com_apartment()
+        self._stream = sd.Stream(
+            device=(audio.input_device, audio.output_device),
+            samplerate=audio.sample_rate,
+            blocksize=audio.block,
+            channels=1,
+            dtype="float32",
+            latency="low",
+            callback=self.engine.callback,
+        )
         try:
-            self._stream = sd.Stream(
-                device=(audio.input_device, audio.output_device),
-                samplerate=audio.sample_rate,
-                blocksize=audio.block,
-                channels=1,
-                dtype="float32",
-                latency="low",
-                callback=self.engine.callback,
-            )
+            self.engine.start()
             self._stream.start()
             self.engine.device_latency_ms = sum(self._stream.latency) * 1000.0
         except Exception:
-            # Never leave a worker thread running behind a stream that failed to open.
+            # Never leave a held device or a running worker behind a failed start.
             self.engine.stop()
+            self._stream.close()
+            self._stream = None
             raise
 
     def stop(self) -> None:

@@ -144,6 +144,37 @@ def test_verdict_without_measurements_is_unknown():
     assert Telemetry().verdict == "unknown"
 
 
+def test_gain_applies_on_the_gated_path_too():
+    """Muting must mute. The gate still emits a fade-out of the previous tail."""
+    params = RuntimeParams(vad_db=-20.0, output_gain=0.0)
+    engine = Engine(
+        Passthrough(),
+        audio=AudioConfig(sample_rate=48000, block=480),
+        settings=EngineConfig(chunk_ms=100.0, fade_ms=20.0, prefill_ms=0.0),
+        params=params,
+    )
+    engine.start()
+    try:
+        engine._prev_tail[:] = 1.0
+        # Feed block by block, as the callback would. Dumping a second of audio in one
+        # write overruns the ring and the worker resynchronises instead of gating.
+        block = np.zeros(engine.block, dtype=np.float32)
+        out = np.zeros(engine.block, dtype=np.float32)
+        peak = 0.0
+        deadline = time.monotonic() + 10.0
+        while engine.stats.chunks < 10 and time.monotonic() < deadline:
+            for _ in range(10):
+                engine.rin.write(block)
+                engine.rout.read_into(out)
+                peak = max(peak, float(np.abs(out).max()))
+            time.sleep(0.005)
+    finally:
+        engine.stop()
+
+    assert engine.stats.vad_skips > 0, "the gate never engaged, so this proves nothing"
+    assert peak == 0.0, f"muted output leaked audio at {peak}"
+
+
 def test_wav_round_trip(tmp_path):
     rng = np.random.default_rng(0)
     audio = (rng.standard_normal(4800) * 0.2).astype(np.float32)
