@@ -33,6 +33,38 @@ PREFILL_MARGIN = 1.5
 # bound, and a UI polling percentiles wants recent behaviour, not the whole session.
 _HISTORY = 4096
 
+# Pausing the collector is process-wide, so engines have to share it. Stopping one while
+# another still runs must not hand the second a collector it was promised would be off.
+_gc_lock = threading.Lock()
+_gc_users = 0
+_gc_was_enabled = True
+
+
+def _pause_gc() -> None:
+    """Stop the collector for as long as any engine is running.
+
+    A collection pause lands directly on the inference tail, and the pipeline creates no
+    reference cycles of its own, so refcounting alone reclaims what it allocates.
+    """
+    global _gc_users, _gc_was_enabled
+    with _gc_lock:
+        if _gc_users == 0:
+            _gc_was_enabled = gc.isenabled()
+            gc.collect()
+            gc.freeze()
+            gc.disable()
+        _gc_users += 1
+
+
+def _resume_gc() -> None:
+    global _gc_users
+    with _gc_lock:
+        _gc_users = max(_gc_users - 1, 0)
+        if _gc_users == 0:
+            if _gc_was_enabled:
+                gc.enable()
+            gc.unfreeze()
+
 
 @dataclass
 class Telemetry:
@@ -52,6 +84,12 @@ class Telemetry:
     budget_ms: float = 0.0
     prefill_ms: float = 0.0
     device_latency_ms: float = 0.0
+    worker_error: str | None = None
+    """Set when the inference worker stopped on an exception. Audio has gone silent."""
+
+    @property
+    def failed(self) -> bool:
+        return self.worker_error is not None
 
     @property
     def headroom(self) -> float:
@@ -97,6 +135,7 @@ class _Stats:
         self._infer = np.zeros(_HISTORY, dtype=np.float64)
         self._n = 0
         self.infer_max = 0.0
+        self.worker_error: str | None = None
 
     def record_infer(self, ms: float) -> None:
         self._infer[self._n % _HISTORY] = ms
@@ -166,6 +205,7 @@ class Engine:
         self._pos = self.ctx + self.F  # start of the next chunk to emit
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
+        self._gc_paused = False
 
     # ------------------------------------------------------------------ properties
     @property
@@ -236,6 +276,19 @@ class Engine:
         return self._vad_left < 0
 
     def _run(self) -> None:
+        """Wrapper that makes a dying worker visible.
+
+        Without this the thread just disappears: the audio callback keeps draining the
+        output ring, so the sound stops while every counter still looks healthy and the
+        UI goes on saying "running". Recording the reason is what lets a caller say
+        something useful instead.
+        """
+        try:
+            self._loop()
+        except Exception as exc:  # noqa: BLE001 -- reported through telemetry, not swallowed
+            self.stats.worker_error = f"{type(exc).__name__}: {exc}"
+
+    def _loop(self) -> None:
         C, F = self.C, self.F
         while not self._stop.is_set():
             self._grow_prefill()
@@ -295,13 +348,11 @@ class Engine:
             self.rout = OutputRing(max(self.prefill + self.C * 8, self.sr * 2))
             self.rout.prefill(self.prefill)
 
-        # A GC pause lands directly on the inference tail. The pipeline creates no
-        # reference cycles, so refcounting alone reclaims everything it allocates.
-        gc.collect()
-        gc.freeze()
-        gc.disable()
+        _pause_gc()
+        self._gc_paused = True
 
         self._stop.clear()
+        self.stats.worker_error = None
         self._worker = threading.Thread(target=self._run, name="rtvc-infer", daemon=True)
         self._worker.start()
 
@@ -310,8 +361,9 @@ class Engine:
         if self._worker:
             self._worker.join(timeout=2.0)
             self._worker = None
-        gc.enable()
-        gc.unfreeze()
+        if self._gc_paused:
+            _resume_gc()
+            self._gc_paused = False
 
     # ------------------------------------------------------------------ observation
     def snapshot(self) -> Telemetry:
@@ -331,6 +383,7 @@ class Engine:
             budget_ms=self.chunk_budget_ms,
             prefill_ms=self.prefill_ms,
             device_latency_ms=self.device_latency_ms,
+            worker_error=s.worker_error,
         )
 
     def latency_budget_ms(self) -> dict[str, float]:
@@ -352,8 +405,12 @@ class Engine:
     def report(self, elapsed: float) -> str:
         t = self.snapshot()
         floor = t.budget_ms + t.infer_max_ms
+        lines = []
+        if t.failed:
+            lines.append(f"  ENGINE STOPPED: {t.worker_error}  (output is silent)")
         return "\n".join(
-            [
+            lines
+            + [
                 f"  chunk {self.chunk_budget_ms:.0f}ms  context {self.ctx * 1000 / self.sr:.0f}ms  "
                 f"fade {self.F * 1000 / self.sr:.0f}ms  window {self.window_ms:.0f}ms",
                 f"  elapsed {elapsed:.1f}s   blocks {t.blocks}   chunks {t.chunks}",

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import wave
 from pathlib import Path
 
 from . import __version__
@@ -113,9 +114,18 @@ def cmd_convert(args: argparse.Namespace) -> int:
     from .session import build_converter
 
     cfg = config_from_args(args)
-    print(describe(cfg, args.converter))
 
-    audio, rate = wavio.read(Path(args.infile))
+    source = Path(args.infile)
+    if not source.exists():
+        print(f"{source} does not exist.", file=sys.stderr)
+        return 2
+    try:
+        audio, rate = wavio.read(source)
+    except (OSError, ValueError, wave.Error) as exc:
+        print(f"cannot read {source}: {exc}", file=sys.stderr)
+        return 2
+
+    print(describe(cfg, args.converter))
     print(f"\ninput {args.infile}   {audio.shape[0] / rate:.1f}s at {rate} Hz\n")
 
     converter = build_converter(cfg, args.converter)
@@ -267,15 +277,49 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def validate(args: argparse.Namespace) -> str | None:
+    """Reject settings that cannot work, naming the reason.
+
+    Left unchecked these surface far from their cause: a chunk of zero looks for a
+    generator whose frame count is nonsense, and a fade longer than the chunk breaks the
+    crossfade arithmetic inside the worker thread rather than at the command line.
+    """
+    chunk = getattr(args, "chunk", None)
+    if chunk is None:
+        return None
+
+    step = 1000.0 / FRAME_HZ
+    if chunk <= 0:
+        return "--chunk must be greater than 0"
+    if abs(chunk / step - round(chunk / step)) > 1e-6:
+        # A generator ONNX is bound to one frame count, so an off-grid chunk quietly
+        # resolves to a file that was built for a different length.
+        return f"--chunk must be a multiple of {step:.0f}ms"
+
+    fade = getattr(args, "fade", 0.0)
+    if fade < 0:
+        return "--fade cannot be negative"
+    if fade >= chunk:
+        return f"--fade ({fade:.0f}ms) must be shorter than --chunk ({chunk:.0f}ms)"
+    if getattr(args, "context", 0.0) < 0:
+        return "--context cannot be negative"
+    if getattr(args, "threads", 1) < 1:
+        return "--threads must be at least 1"
+    if getattr(args, "block", 1) < 1:
+        return "--block must be at least 1"
+    if getattr(args, "rate", 1) < 8000:
+        return "--rate must be at least 8000"
+    if getattr(args, "gain", 0.0) < 0:
+        return "--gain cannot be negative"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if getattr(args, "chunk", None) is not None:
-        # A generator ONNX is bound to one frame count, so an arbitrary chunk value
-        # silently falls back to a mismatched file. Reject it here with the real reason.
-        step = 1000.0 / FRAME_HZ
-        if abs(args.chunk / step - round(args.chunk / step)) > 1e-6:
-            print(f"--chunk must be a multiple of {step:.0f}ms", file=sys.stderr)
-            return 2
+    problem = validate(args)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 2
     return args.func(args)
 
 

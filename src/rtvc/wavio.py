@@ -22,6 +22,14 @@ def read(path: Path) -> tuple[np.ndarray, int]:
 
     if width == 2:
         data = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    elif width == 3:
+        # 24-bit is what most recording gear writes, and numpy has no 24-bit dtype.
+        # Widen each sample into the top three bytes of an int32 and scale accordingly,
+        # which carries the sign bit across without a per-sample Python loop.
+        packed = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3)
+        widened = np.zeros((packed.shape[0], 4), dtype=np.uint8)
+        widened[:, 1:] = packed
+        data = widened.view("<i4").ravel().astype(np.float32) / 2147483648.0
     elif width == 4:
         data = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
     elif width == 1:

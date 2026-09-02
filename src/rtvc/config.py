@@ -14,7 +14,7 @@ Two kinds of settings live here, and the split matters:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +121,23 @@ class ModelConfig:
         return self.root / "rvc" / "rmvpe.onnx"
 
 
+def _build(kind, values: dict[str, Any], section: str):
+    """Construct a config section, naming the offending key when one does not fit.
+
+    A preset written by a newer build, or edited by hand, otherwise fails with a bare
+    TypeError about __init__ keyword arguments, which says nothing about which file or
+    which section is wrong.
+    """
+    allowed = {f.name for f in fields(kind)}
+    unknown = sorted(set(values) - allowed)
+    if unknown:
+        raise ValueError(
+            f"unknown {section} setting(s) in preset: {', '.join(unknown)}. "
+            f"Known settings: {', '.join(sorted(allowed))}"
+        )
+    return kind(**values)
+
+
 @dataclass
 class Config:
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -157,10 +174,10 @@ class Config:
         if "root" in model:
             model["root"] = Path(model["root"])
         return cls(
-            audio=AudioConfig(**d.get("audio", {})),
-            engine=EngineConfig(**d.get("engine", {})),
-            model=ModelConfig(**model),
-            params=RuntimeParams(**d.get("params", {})),
+            audio=_build(AudioConfig, d.get("audio", {}), "audio"),
+            engine=_build(EngineConfig, d.get("engine", {}), "engine"),
+            model=_build(ModelConfig, model, "model"),
+            params=_build(RuntimeParams, d.get("params", {}), "params"),
         )
 
     @classmethod

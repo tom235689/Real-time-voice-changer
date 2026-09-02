@@ -372,6 +372,14 @@ class MainWindow(QMainWindow):
             self.bar_budget.setValue(0)
             return
         t = self.session.snapshot()
+        if t.failed:
+            # The worker is gone and the output has gone silent. Saying "running" here
+            # would be worse than useless, so tear the session down and say what broke.
+            message = t.worker_error
+            self._stop()
+            self.lbl_state.setText(f"stopped after an error: {message}")
+            QMessageBox.critical(self, "Conversion stopped", message)
+            return
         self.lbl_latency.setText(
             f"{t.total_latency_ms:.0f} ms total   "
             f"({t.prefill_ms:.0f} processing + {t.device_latency_ms:.0f} device)"
