@@ -1,5 +1,6 @@
 """Command line entry point.
 
+    rtvc doctor                        check everything needed before converting
     rtvc devices                       list audio devices, flag virtual cables
     rtvc simulate --seconds 45         run at real-time pace with no device attached
     rtvc convert --in a.wav --out b.wav   offline conversion, for judging quality by ear
@@ -87,6 +88,14 @@ def cmd_devices(args: argparse.Namespace) -> int:
     else:
         print("\nNo virtual cable found. Install VB-CABLE to feed a meeting app.")
     return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from .doctor import format_report, run_checks, worst_status
+
+    checks = run_checks(config_from_args(args))
+    print(format_report(checks))
+    return worst_status(checks)
 
 
 def cmd_simulate(args: argparse.Namespace) -> int:
@@ -241,8 +250,8 @@ def add_common(p: argparse.ArgumentParser) -> None:
     voice.add_argument(
         "--converter",
         default="rvc",
-        choices=["rvc", "passthrough", "gain"],
-        help="passthrough and gain verify the audio path without the model",
+        choices=["rvc", "passthrough"],
+        help="passthrough verifies the audio path without the model",
     )
 
 
@@ -252,6 +261,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("devices", help="list audio devices").set_defaults(func=cmd_devices)
+
+    doctor = sub.add_parser("doctor", help="check everything needed before converting")
+    add_common(doctor)
+    doctor.set_defaults(func=cmd_doctor)
 
     sim = sub.add_parser("simulate", help="run at real-time pace with no audio device")
     sim.add_argument("--seconds", type=float, default=45.0)

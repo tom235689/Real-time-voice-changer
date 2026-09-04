@@ -26,31 +26,18 @@ class Converter(ABC):
     def process(self, window: np.ndarray, tail: int) -> np.ndarray:
         """Return exactly `tail` samples, aligned to the end of `window`."""
 
-    def warmup(self, window_frames: int, tail: int) -> None:
-        """Force lazy graph compilation and allocation before the clock starts."""
-        for _ in range(2):
-            self.process(np.zeros(window_frames, dtype=np.float32), tail)
-
     def close(self) -> None:  # noqa: B027 -- most converters hold nothing to release
         """Release inference sessions. Safe to call more than once."""
 
 
 class Passthrough(Converter):
-    """No conversion. Verifies the audio path end to end."""
+    """No conversion. Verifies the audio path end to end.
+
+    Level changes belong to the engine's output gain, which applies to every converter;
+    a converter that scaled as well would have its gain applied twice.
+    """
 
     context_ms = 0.0
 
     def process(self, window: np.ndarray, tail: int) -> np.ndarray:
         return window[-tail:]
-
-
-class Gain(Converter):
-    """Passthrough with a level change, so it is audible that the path is live."""
-
-    context_ms = 0.0
-
-    def __init__(self, gain: float = 1.0) -> None:
-        self.gain = gain
-
-    def process(self, window: np.ndarray, tail: int) -> np.ndarray:
-        return window[-tail:] * self.gain

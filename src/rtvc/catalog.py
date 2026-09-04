@@ -41,9 +41,6 @@ class VoiceEntry:
                 out.append(ms)
         return out
 
-    def variants(self) -> set[str]:
-        return set().union(*self.frames.values()) if self.frames else set()
-
 
 def exported_voices(onnx_dir: Path) -> dict[str, VoiceEntry]:
     """Scan a directory of exported generators and group them by voice."""

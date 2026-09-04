@@ -14,6 +14,7 @@ a working start look like a hang.
 
 from __future__ import annotations
 
+import json
 import threading
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -36,12 +37,13 @@ from PySide6.QtWidgets import (
 )
 
 from ..catalog import exported_voices
-from ..config import Config
+from ..config import Config, user_settings_path
 from ..devices import list_devices
 from ..session import Session
 
 POLL_MS = 250
 CHUNK_CHOICES = (100.0, 150.0, 200.0, 250.0)
+METER_FLOOR_DB = -60
 
 
 class MainWindow(QMainWindow):
@@ -76,6 +78,7 @@ class MainWindow(QMainWindow):
 
         self._reload_devices()
         self._reload_voices()
+        self._restore_ui_state()
         self._sync_from_config()
 
     # ------------------------------------------------------------------ construction
@@ -163,9 +166,16 @@ class MainWindow(QMainWindow):
         self.bar_budget.setRange(0, 100)
         self.bar_budget.setFormat("%p% of budget")
 
+        # Meters answer the question people actually have -- "can they hear me?" -- and
+        # separate a dead microphone from a dead model, which no other readout does.
+        self.bar_input = self._meter()
+        self.bar_output = self._meter()
+
         for row, (name, widget) in enumerate(
             [
                 ("State", self.lbl_state),
+                ("Input level", self.bar_input),
+                ("Output level", self.bar_output),
                 ("Latency", self.lbl_latency),
                 ("Inference", self.lbl_infer),
                 ("Glitches", self.lbl_glitches),
@@ -189,6 +199,16 @@ class MainWindow(QMainWindow):
         row.addWidget(btn_load)
         row.addWidget(btn_save)
         return row
+
+    @staticmethod
+    def _meter() -> QProgressBar:
+        """A dBFS meter. Scaled -60..0, which is where speech actually lives."""
+        bar = QProgressBar()
+        bar.setRange(METER_FLOOR_DB, 0)
+        bar.setValue(METER_FLOOR_DB)
+        bar.setFormat("%v dBFS")
+        bar.setTextVisible(True)
+        return bar
 
     @staticmethod
     def _with_label(slider: QSlider, label: QLabel) -> QWidget:
@@ -346,6 +366,8 @@ class MainWindow(QMainWindow):
         self.btn_start.setText("Stop")
         self.btn_start.setEnabled(True)
         self.lbl_state.setText("running")
+        # Remember a combination that actually started, not one that merely got picked.
+        self._save_ui_state()
 
     def _on_failed(self, message: str) -> None:
         self._starting = False
@@ -370,6 +392,8 @@ class MainWindow(QMainWindow):
     def _refresh_telemetry(self) -> None:
         if self.session is None:
             self.bar_budget.setValue(0)
+            self.bar_input.setValue(METER_FLOOR_DB)
+            self.bar_output.setValue(METER_FLOOR_DB)
             return
         t = self.session.snapshot()
         if t.failed:
@@ -393,6 +417,70 @@ class MainWindow(QMainWindow):
             f"gate skipped {t.vad_skips}/{t.chunks}"
         )
         self.bar_budget.setValue(min(int(t.headroom * 100), 100))
+        self.bar_input.setValue(max(int(t.input_dbfs), METER_FLOOR_DB))
+        self.bar_output.setValue(max(int(t.output_dbfs), METER_FLOOR_DB))
+
+    # ------------------------------------------------------------------ remembered state
+    def _ui_state(self) -> dict:
+        """What the panel should remember between runs.
+
+        Devices are recorded by name as well as index: indices shift as soon as a headset
+        is plugged in or removed, so an index alone silently selects the wrong device.
+        """
+        params = self.cfg.params
+        return {
+            "input_device": self.cmb_input.currentData(),
+            "input_name": self.cmb_input.currentText(),
+            "output_device": self.cmb_output.currentData(),
+            "output_name": self.cmb_output.currentText(),
+            "voice": self.cmb_voice.currentText(),
+            "chunk_ms": self.cmb_chunk.currentData(),
+            "variant": self.cmb_precision.currentData(),
+            "key_shift": params.key_shift,
+            "vad_db": params.vad_db,
+            "output_gain": params.output_gain,
+        }
+
+    def _save_ui_state(self) -> None:
+        try:
+            path = user_settings_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._ui_state(), indent=2), encoding="utf-8")
+        except OSError:
+            pass  # remembering preferences is a convenience, never a reason to fail
+
+    def _restore_ui_state(self) -> None:
+        try:
+            path = user_settings_path()
+            if not path.is_file():
+                return
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return  # a corrupt settings file must not stop the panel from opening
+
+        self._select_device(self.cmb_input, state.get("input_device"), state.get("input_name"))
+        self._select_device(self.cmb_output, state.get("output_device"), state.get("output_name"))
+        if state.get("voice") in self._voices:
+            self.cmb_voice.setCurrentText(state["voice"])
+        if state.get("variant") is not None:
+            self._select_data(self.cmb_precision, state["variant"])
+        self._reload_chunks()
+        self._select_data(self.cmb_chunk, state.get("chunk_ms"))
+
+        params = self.cfg.params
+        params.key_shift = float(state.get("key_shift", params.key_shift))
+        params.output_gain = float(state.get("output_gain", params.output_gain))
+        params.vad_db = state.get("vad_db", params.vad_db)
+
+    @staticmethod
+    def _select_device(combo: QComboBox, index, name) -> None:
+        """Match the remembered device by name first, then fall back to its old index."""
+        if name:
+            at = combo.findText(name)
+            if at >= 0:
+                combo.setCurrentIndex(at)
+                return
+        MainWindow._select_data(combo, index)
 
     # ------------------------------------------------------------------ presets
     def _load_preset(self) -> None:
@@ -426,5 +514,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self._closing = True
         self._timer.stop()
+        self._save_ui_state()
         self._stop()
         super().closeEvent(event)

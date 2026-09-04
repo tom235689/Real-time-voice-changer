@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 
 from .config import Config
-from .convert.base import Converter, Gain, Passthrough
+from .convert.base import Converter, Passthrough
 from .convert.rvc import RealRVC
 from .engine import Engine, Simulator, Telemetry
 
@@ -43,13 +43,12 @@ def ensure_com_apartment() -> None:
 def build_converter(cfg: Config, kind: str = "rvc") -> Converter:
     """Create the converter named by `kind`.
 
-    'passthrough' and 'gain' exist to prove the audio path independently of the model:
-    if they are clean and 'rvc' is not, the fault is in inference, not in the plumbing.
+    'passthrough' exists to prove the audio path independently of the model: if it is
+    clean and 'rvc' is not, the fault is in inference, not in the plumbing. Combine it
+    with the output gain to make the path audible.
     """
     if kind == "passthrough":
         return Passthrough()
-    if kind == "gain":
-        return Gain(cfg.params.output_gain)
     if kind != "rvc":
         raise ValueError(f"unknown converter: {kind}")
     return RealRVC(

@@ -14,6 +14,7 @@ Two kinds of settings live here, and the split matters:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,16 @@ from typing import Any
 from .constants import SR, generator_frames
 
 DEFAULT_BACKEND: dict[str, str] = {"enc": "ov", "pit": "ort", "gen": "ort"}
+
+
+def user_settings_path() -> Path:
+    """Where the desktop panel remembers what was last selected.
+
+    Kept outside the checkout so it survives a reinstall and does not end up in git.
+    """
+    base = os.environ.get("APPDATA") or os.environ.get("XDG_CONFIG_HOME")
+    root = Path(base) if base else Path.home() / ".config"
+    return root / "rtvc" / "settings.json"
 
 
 def default_model_root() -> Path:
@@ -64,10 +75,6 @@ class AudioConfig:
     block: int = 480
     input_device: int | None = None
     output_device: int | None = None
-
-    @property
-    def block_ms(self) -> float:
-        return self.block * 1000.0 / self.sample_rate
 
 
 @dataclass

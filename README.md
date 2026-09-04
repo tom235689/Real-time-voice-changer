@@ -112,7 +112,17 @@ everything after the first export.
 
 ## Use
 
-### Check what is available
+### Check the install first
+
+```powershell
+uv run rtvc doctor
+```
+
+Checks the runtime, the model files, the exported voices and chunk sizes, the audio
+devices and the virtual cable, and prints the command that fixes anything missing.
+Exits non-zero only when something actually blocks conversion. Run this before anything
+else; most first-run trouble is a missing model file or a missing cable, and both
+otherwise surface much later as something that reads like a bug.
 
 ```powershell
 uv run rtvc devices
@@ -159,7 +169,14 @@ uv run rtvc gui
 ```
 
 Device pickers, live pitch/gain/gate/bypass controls, latency and glitch readouts, and
-preset save/load.
+preset save/load. It remembers the devices, voice and chunk size that last started
+successfully, matching devices by name so a reconnected headset does not silently
+select something else.
+
+Input and output level meters sit at the top of the measurements. They answer the
+question that actually comes up — "can they hear me?" — and separate the two failures
+that otherwise look identical: a silent input meter is the microphone, a live input
+with a silent output is the conversion.
 
 ## Meeting app settings
 
@@ -178,7 +195,7 @@ Conferencing apps treat converted speech as noise and will destroy it. Turn that
 | `--enc-fp32` | fp32 encoder. Measured median 220 ms against the same budget, 92 underruns in 15 s. It does not sustain; kept for comparison only. |
 | `--key -2` | Pitch shift in semitones. |
 | `--vad-db -45` | Skip inference during silence. Thermal protection on a 35 W part, not a latency win. |
-| `--converter passthrough` | Verify the audio path with the model out of the picture. |
+| `--converter passthrough` | Verify the audio path with the model out of the picture. Combine with `--gain` to make it audible. |
 | `--threads 6` | Lower if inference contends with the audio callback. |
 
 ## Development

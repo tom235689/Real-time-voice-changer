@@ -87,9 +87,22 @@ class Telemetry:
     worker_error: str | None = None
     """Set when the inference worker stopped on an exception. Audio has gone silent."""
 
+    input_peak: float = 0.0
+    output_peak: float = 0.0
+    """Peak levels, 0..1. The only way for someone to see whether audio is moving at
+    all: a silent input meter means the microphone, not the model."""
+
     @property
     def failed(self) -> bool:
         return self.worker_error is not None
+
+    @property
+    def input_dbfs(self) -> float:
+        return to_dbfs(self.input_peak)
+
+    @property
+    def output_dbfs(self) -> float:
+        return to_dbfs(self.output_peak)
 
     @property
     def headroom(self) -> float:
@@ -120,6 +133,22 @@ class Telemetry:
         return self.prefill_ms + self.device_latency_ms
 
 
+# Peak-hold decay per chunk. A bare per-chunk peak flickers too fast to read; holding
+# and decaying gives a meter that rises instantly and falls at a legible rate.
+_PEAK_DECAY = 0.65
+
+
+def _decayed_peak(previous: float, block: np.ndarray) -> float:
+    if block.size == 0:
+        return previous * _PEAK_DECAY
+    return max(float(np.abs(block).max()), previous * _PEAK_DECAY)
+
+
+def to_dbfs(peak: float) -> float:
+    """Linear peak to dBFS, floored at -90 so a silent meter still has a scale."""
+    return 20.0 * np.log10(peak) if peak > 10.0 ** (-90.0 / 20.0) else -90.0
+
+
 class _Stats:
     """Counters owned by the engine. Read through Engine.snapshot(), not directly."""
 
@@ -136,6 +165,14 @@ class _Stats:
         self._n = 0
         self.infer_max = 0.0
         self.worker_error: str | None = None
+        self.input_peak = 0.0
+        self.output_peak = 0.0
+
+    def observe_input(self, block: np.ndarray) -> None:
+        self.input_peak = _decayed_peak(self.input_peak, block)
+
+    def observe_output(self, block: np.ndarray) -> None:
+        self.output_peak = _decayed_peak(self.output_peak, block)
 
     def record_infer(self, ms: float) -> None:
         self._infer[self._n % _HISTORY] = ms
@@ -302,6 +339,8 @@ class Engine:
                 self._pos = self.rin.written - C  # resynchronise to the live edge
                 continue
 
+            self.stats.observe_input(self._win[self.ctx :])
+
             if self._gated():
                 self._emit_silence()
                 self.stats.vad_skips += 1
@@ -326,6 +365,7 @@ class Engine:
             if gain != 1.0:
                 self._emit *= gain
 
+            self.stats.observe_output(self._emit)
             if not self.rout.write(self._emit):
                 self.stats.drops += 1
             self._pos += C
@@ -384,6 +424,8 @@ class Engine:
             prefill_ms=self.prefill_ms,
             device_latency_ms=self.device_latency_ms,
             worker_error=s.worker_error,
+            input_peak=s.input_peak,
+            output_peak=s.output_peak,
         )
 
     def latency_budget_ms(self) -> dict[str, float]:
@@ -414,6 +456,8 @@ class Engine:
                 f"  chunk {self.chunk_budget_ms:.0f}ms  context {self.ctx * 1000 / self.sr:.0f}ms  "
                 f"fade {self.F * 1000 / self.sr:.0f}ms  window {self.window_ms:.0f}ms",
                 f"  elapsed {elapsed:.1f}s   blocks {t.blocks}   chunks {t.chunks}",
+                f"  levels  in {t.input_dbfs:6.1f} dBFS   out {t.output_dbfs:6.1f} dBFS"
+                + ("   (input is silent -- check the microphone)" if t.input_dbfs <= -80 else ""),
                 f"  inference  p50 {t.infer_p50_ms:.1f}ms   p95 {t.infer_p95_ms:.1f}ms   "
                 f"max {t.infer_max_ms:.1f}ms   (budget {t.budget_ms:.0f}ms)",
                 f"  underruns {t.underruns} (steady)   startup {t.startup_underruns}   "
